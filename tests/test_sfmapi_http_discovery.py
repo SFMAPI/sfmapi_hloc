@@ -1,0 +1,65 @@
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
+import pytest
+
+from sfmapi_hloc.backend import HlocBackend
+
+
+def _fake_hloc(root: Path) -> Path:
+    (root / "hloc").mkdir(parents=True, exist_ok=True)
+    (root / "setup.py").write_text("setup(name='hloc')\n", encoding="utf-8")
+    return root
+
+
+def test_sfmapi_http_discovery_surfaces_hloc_actions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("fastapi")
+    from app.adapters.registry import register_backend
+    from app.core.capabilities import reset_capabilities_cache
+    from app.core.config import reset_settings_for_tests
+    from app.db.session import reset_engine_for_tests
+    from fastapi.testclient import TestClient
+
+    root = _fake_hloc(tmp_path / "Hierarchical-Localization")
+    monkeypatch.setenv("SFMAPI_BACKEND", "hloc")
+    monkeypatch.setenv("SFMAPI_MCP_MODE", "off")
+    from app.main import create_app
+
+    settings = reset_settings_for_tests(
+        ephemeral=True,
+        db_url="sqlite+aiosqlite:///file::memory:?cache=shared&uri=true",
+        blob_backend="memory",
+        queue_backend="inline",
+        inline_tasks=True,
+        workspace_root=tmp_path / "workspace",
+    )
+    asyncio.run(reset_engine_for_tests(settings))
+    reset_capabilities_cache()
+    register_backend("hloc", lambda: HlocBackend(root))
+
+    with TestClient(create_app()) as client:
+        capabilities = client.get("/v1/capabilities").json()
+        assert capabilities["backend"]["name"] == "hloc"
+        assert capabilities["features"]["backend.actions"] is True
+        assert capabilities["features"]["backend.config_schemas"] is False
+
+        backend = client.get("/v1/backend").json()
+        assert backend["name"] == "hloc"
+        assert backend["action_count"] > 0
+        assert backend["config_schema_count"] == 0
+
+        actions = client.get("/v1/backend/actions?include_schemas=true&page_size=50").json()[
+            "items"
+        ]
+        action_ids = {action["action_id"] for action in actions}
+        assert "hloc.runPipeline" in action_ids
+        assert "hloc.extractFeatures" in action_ids
+        pipeline = next(action for action in actions if action["action_id"] == "hloc.runPipeline")
+        assert "pairing_mode" in pipeline["input_schema"]["properties"]
+
+        assert client.get("/v1/backend/config-schemas").json()["items"] == []
