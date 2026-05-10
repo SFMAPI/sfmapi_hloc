@@ -201,21 +201,116 @@ HLOC_ACTIONS: tuple[HlocAction, ...] = (
         "hloc.colmap_from_nvm",
         gpu_required=False,
     ),
+    HlocAction(
+        "hloc.convertModel",
+        "HLOC COLMAP model conversion",
+        "conversion",
+        "Read a COLMAP binary or text model and optionally write it in another format.",
+        "hloc.convertModel",
+        "hloc.utils.read_write_model",
+        gpu_required=False,
+    ),
+    HlocAction(
+        "hloc.listConfigs",
+        "HLOC configuration catalog",
+        "utility",
+        "List HLOC feature extractor, sparse matcher, and dense matcher configurations.",
+        "hloc.listConfigs",
+        gpu_required=False,
+    ),
+    HlocAction(
+        "hloc.pipelineAachen",
+        "HLOC Aachen pipeline",
+        "pipeline",
+        "Run the upstream Aachen Day-Night localization pipeline.",
+        "hloc.pipelineAachen",
+        "hloc.pipelines.Aachen.pipeline",
+    ),
+    HlocAction(
+        "hloc.pipelineAachenV11",
+        "HLOC Aachen v1.1 pipeline",
+        "pipeline",
+        "Run the upstream Aachen Day-Night v1.1 localization pipeline.",
+        "hloc.pipelineAachenV11",
+        "hloc.pipelines.Aachen_v1_1.pipeline",
+    ),
+    HlocAction(
+        "hloc.pipelineAachenV11LoFTR",
+        "HLOC Aachen v1.1 LoFTR pipeline",
+        "pipeline",
+        "Run the upstream Aachen v1.1 dense LoFTR localization pipeline.",
+        "hloc.pipelineAachenV11LoFTR",
+        "hloc.pipelines.Aachen_v1_1.pipeline_loftr",
+    ),
+    HlocAction(
+        "hloc.pipelineRobotCar",
+        "HLOC RobotCar pipeline",
+        "pipeline",
+        "Run the upstream RobotCar Seasons localization pipeline.",
+        "hloc.pipelineRobotCar",
+        "hloc.pipelines.RobotCar.pipeline",
+    ),
+    HlocAction(
+        "hloc.pipelineRobotCarColmapFromNvm",
+        "HLOC RobotCar NVM to COLMAP",
+        "conversion",
+        "Convert RobotCar NVM and database files into a COLMAP model.",
+        "hloc.pipelineRobotCarColmapFromNvm",
+        "hloc.pipelines.RobotCar.colmap_from_nvm",
+        gpu_required=False,
+    ),
+    HlocAction(
+        "hloc.pipelineCMU",
+        "HLOC CMU pipeline",
+        "pipeline",
+        "Run the upstream Extended CMU Seasons localization pipeline.",
+        "hloc.pipelineCMU",
+        "hloc.pipelines.CMU.pipeline",
+    ),
+    HlocAction(
+        "hloc.pipelineCambridge",
+        "HLOC Cambridge pipeline",
+        "pipeline",
+        "Run the upstream Cambridge Landmarks localization pipeline.",
+        "hloc.pipelineCambridge",
+        "hloc.pipelines.Cambridge.pipeline",
+    ),
+    HlocAction(
+        "hloc.pipelineSevenScenes",
+        "HLOC 7-Scenes pipeline",
+        "pipeline",
+        "Run the upstream 7-Scenes localization pipeline.",
+        "hloc.pipelineSevenScenes",
+        "hloc.pipelines.7Scenes.pipeline",
+    ),
+    HlocAction(
+        "hloc.pipelineSevenScenesCorrectDepth",
+        "HLOC 7-Scenes depth correction",
+        "pipeline",
+        "Correct 7-Scenes SfM models with ground-truth depth.",
+        "hloc.pipelineSevenScenesCorrectDepth",
+        "hloc.pipelines.7Scenes.create_gt_sfm",
+    ),
+    HlocAction(
+        "hloc.pipelineFourSeasonsPrepareReference",
+        "HLOC 4Seasons reference preparation",
+        "pipeline",
+        "Prepare the upstream 4Seasons reference SfM model.",
+        "hloc.pipelineFourSeasonsPrepareReference",
+        "hloc.pipelines.4Seasons.prepare_reference",
+    ),
+    HlocAction(
+        "hloc.pipelineFourSeasonsLocalize",
+        "HLOC 4Seasons localization",
+        "pipeline",
+        "Run the upstream 4Seasons sequence localization workflow.",
+        "hloc.pipelineFourSeasonsLocalize",
+        "hloc.pipelines.4Seasons.localize",
+    ),
 )
 _ACTION_BY_ID = {action.action_id: action for action in HLOC_ACTIONS}
-_SCRIPT_MODULES = {action.module for action in HLOC_ACTIONS if action.module} | {
-    "hloc.utils.read_write_model",
-    "hloc.pipelines.Aachen.pipeline",
-    "hloc.pipelines.Aachen_v1_1.pipeline",
-    "hloc.pipelines.Aachen_v1_1.pipeline_loftr",
-    "hloc.pipelines.CMU.pipeline",
-    "hloc.pipelines.RobotCar.pipeline",
-    "hloc.pipelines.RobotCar.colmap_from_nvm",
-    "hloc.pipelines.Cambridge.pipeline",
-    "hloc.pipelines.7Scenes.pipeline",
-    "hloc.pipelines.4Seasons.prepare_reference",
-    "hloc.pipelines.4Seasons.localize",
-}
+HLOC_CLI_MODULES = tuple(sorted({action.module for action in HLOC_ACTIONS if action.module}))
+_SCRIPT_MODULES = set(HLOC_CLI_MODULES)
 
 
 def _expand_path(value: str | Path) -> Path:
@@ -881,6 +976,134 @@ class HlocBackend:
                 },
                 required=["nvm_path", "intrinsics_path", "database_path", "output_path"],
             )
+        if action_id == "hloc.convertModel":
+            return self._schema(
+                {
+                    **common,
+                    "input_model": {"type": "string"},
+                    "input_format": {
+                        "type": "string",
+                        "enum": ["", ".bin", ".txt"],
+                        "default": "",
+                    },
+                    "output_model": {"type": "string"},
+                    "output_format": {
+                        "type": "string",
+                        "enum": [".bin", ".txt"],
+                        "default": ".txt",
+                    },
+                },
+                required=["input_model"],
+            )
+        if action_id == "hloc.listConfigs":
+            return self._schema(
+                {
+                    **common,
+                    "include_values": {"type": "boolean", "default": False},
+                },
+                required=[],
+            )
+        if action_id in {
+            "hloc.pipelineAachen",
+            "hloc.pipelineAachenV11",
+            "hloc.pipelineAachenV11LoFTR",
+            "hloc.pipelineRobotCar",
+        }:
+            return self._schema(
+                {
+                    **common,
+                    "dataset": {"type": "string"},
+                    "outputs": {"type": "string"},
+                    "num_covis": {"type": "integer", "minimum": 1, "default": 20},
+                    "num_loc": {"type": "integer", "minimum": 1, "default": 50},
+                },
+                required=[],
+            )
+        if action_id == "hloc.pipelineRobotCarColmapFromNvm":
+            return self._schema(
+                {
+                    **common,
+                    "nvm_path": {"type": "string"},
+                    "database_path": {"type": "string"},
+                    "output_path": {"type": "string"},
+                    "skip_points": {"type": "boolean", "default": False},
+                },
+                required=["nvm_path", "database_path", "output_path"],
+            )
+        if action_id == "hloc.pipelineCMU":
+            return self._schema(
+                {
+                    **common,
+                    "slices": {
+                        "type": "string",
+                        "default": "*",
+                        "description": "One slice, an inclusive range like 2-6, or a Python list.",
+                    },
+                    "dataset": {"type": "string"},
+                    "outputs": {"type": "string"},
+                    "num_covis": {"type": "integer", "minimum": 1, "default": 20},
+                    "num_loc": {"type": "integer", "minimum": 1, "default": 10},
+                },
+                required=[],
+            )
+        if action_id == "hloc.pipelineCambridge":
+            return self._scene_pipeline_schema(
+                ["KingsCollege", "OldHospital", "ShopFacade", "StMarysChurch", "GreatCourt"],
+                include_num_loc=True,
+            )
+        if action_id == "hloc.pipelineSevenScenes":
+            schema = self._scene_pipeline_schema(
+                ["chess", "fire", "heads", "office", "pumpkin", "redkitchen", "stairs"],
+                include_num_loc=False,
+            )
+            schema["properties"]["use_dense_depth"] = {"type": "boolean", "default": False}
+            return schema
+        if action_id == "hloc.pipelineSevenScenesCorrectDepth":
+            return self._schema(
+                {
+                    **common,
+                    "scenes": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "chess",
+                                "fire",
+                                "heads",
+                                "office",
+                                "pumpkin",
+                                "redkitchen",
+                                "stairs",
+                            ],
+                        },
+                    },
+                    "dataset": {"type": "string"},
+                    "outputs": {"type": "string"},
+                },
+                required=[],
+            )
+        if action_id == "hloc.pipelineFourSeasonsPrepareReference":
+            return self._schema(
+                {
+                    **common,
+                    "dataset": {"type": "string"},
+                    "outputs": {"type": "string"},
+                },
+                required=[],
+            )
+        if action_id == "hloc.pipelineFourSeasonsLocalize":
+            return self._schema(
+                {
+                    **common,
+                    "sequence": {
+                        "type": "string",
+                        "enum": ["training", "validation", "test0", "test1"],
+                    },
+                    "dataset": {"type": "string"},
+                    "outputs": {"type": "string"},
+                },
+                required=["sequence"],
+            )
         raise NotFoundError(f"Backend action {action_id!r} not found")
 
     def _pipeline_input_schema(self) -> dict[str, Any]:
@@ -935,6 +1158,27 @@ class HlocBackend:
             "timeout_seconds": {"type": "number"},
             "overwrite": {"type": "boolean", "default": False},
         }
+
+    def _scene_pipeline_schema(
+        self,
+        scenes: list[str],
+        *,
+        include_num_loc: bool,
+    ) -> dict[str, Any]:
+        properties: dict[str, Any] = {
+            **self._common_properties(),
+            "scenes": {
+                "type": "array",
+                "items": {"type": "string", "enum": scenes},
+                "default": scenes,
+            },
+            "dataset": {"type": "string"},
+            "outputs": {"type": "string"},
+            "num_covis": {"type": "integer", "minimum": 1, "default": 20},
+        }
+        if include_num_loc:
+            properties["num_loc"] = {"type": "integer", "minimum": 1, "default": 10}
+        return self._schema(properties, required=[])
 
     def _module_input_schema(self) -> dict[str, Any]:
         return {
@@ -994,6 +1238,7 @@ class HlocBackend:
         for required in schema.get("required") or []:
             if inputs.get(required) in (None, ""):
                 raise ValidationError(f"{required} is required")
+        self._validate_schema_enums(schema, inputs)
         self._validate_enums(action_id, inputs)
         if action_id == "hloc.pairsExhaustive" and not (
             inputs.get("image_list") or inputs.get("features_path")
@@ -1010,6 +1255,32 @@ class HlocBackend:
         if unknown:
             raise ValidationError(f"unknown input(s): {', '.join(unknown)}")
         return inputs
+
+    def _validate_schema_enums(self, schema: dict[str, Any], inputs: dict[str, Any]) -> None:
+        properties = schema.get("properties") or {}
+        for name, field_schema in properties.items():
+            if name not in inputs or inputs[name] is None:
+                continue
+            allowed = field_schema.get("enum")
+            if allowed is not None:
+                value = str(inputs[name])
+                if value not in allowed:
+                    raise ValidationError(f"{name} must be one of: {', '.join(allowed)}")
+                inputs[name] = value
+                continue
+            item_schema = field_schema.get("items") or {}
+            item_allowed = item_schema.get("enum")
+            if item_allowed is None:
+                continue
+            values = inputs[name]
+            if isinstance(values, str):
+                values = [values]
+            if not isinstance(values, list):
+                raise ValidationError(f"{name} must be an array")
+            bad = [str(value) for value in values if str(value) not in item_allowed]
+            if bad:
+                raise ValidationError(f"{name} values must be one of: {', '.join(item_allowed)}")
+            inputs[name] = [str(value) for value in values]
 
     def _validate_enums(self, action_id: str, inputs: dict[str, Any]) -> None:
         for key, allowed in (
@@ -1050,6 +1321,7 @@ __all__ = [
     "DENSE_CONFIGS",
     "FEATURE_CONFIGS",
     "HLOC_ACTIONS",
+    "HLOC_CLI_MODULES",
     "MATCHER_CONFIGS",
     "RETRIEVAL_CONFIGS",
     "HlocBackend",

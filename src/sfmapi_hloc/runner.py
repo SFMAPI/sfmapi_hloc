@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import ast
+import importlib
 import json
+import runpy
 import sys
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 
@@ -62,6 +66,59 @@ def _camera_mode(value: str) -> Any:
     except KeyError as exc:
         allowed = ", ".join(pycolmap.CameraMode.__members__.keys())
         raise ValueError(f"camera_mode must be one of: {allowed}") from exc
+
+
+def _add_cli_option(args: list[str], name: str, value: Any, *, flag: str | None = None) -> None:
+    if value in (None, ""):
+        return
+    option = flag or f"--{name}"
+    if isinstance(value, bool):
+        if value:
+            args.append(option)
+        return
+    if isinstance(value, list):
+        if value:
+            args.append(option)
+            args.extend(str(item) for item in value)
+        return
+    args.extend([option, str(value)])
+
+
+def _run_module_as_main(module: str, args: list[str]) -> dict[str, Any]:
+    old_argv = sys.argv[:]
+    try:
+        sys.argv = [module, *args]
+        runpy.run_module(module, run_name="__main__")
+    finally:
+        sys.argv = old_argv
+    return {"module": module, "args": ["python", "-m", module, *args]}
+
+
+def _run_dataset_pipeline(
+    module: str, inputs: dict[str, Any], defaults: dict[str, Any]
+) -> dict[str, Any]:
+    pipeline = importlib.import_module(module)
+    args = SimpleNamespace(
+        dataset=_path(inputs.get("dataset", defaults["dataset"])),
+        outputs=_path(inputs.get("outputs", defaults["outputs"])),
+        num_covis=int(inputs.get("num_covis", defaults["num_covis"])),
+        num_loc=int(inputs.get("num_loc", defaults["num_loc"])),
+    )
+    pipeline.run(args)
+    return {
+        "module": module,
+        "dataset": str(args.dataset),
+        "outputs": str(args.outputs),
+        "num_covis": args.num_covis,
+        "num_loc": args.num_loc,
+    }
+
+
+def _pipeline_cli_args(inputs: dict[str, Any], option_names: list[str]) -> list[str]:
+    args: list[str] = []
+    for name in option_names:
+        _add_cli_option(args, name, inputs.get(name))
+    return args
 
 
 def run_extract_features(inputs: dict[str, Any]) -> dict[str, Any]:
@@ -265,6 +322,180 @@ def run_colmap_from_nvm(inputs: dict[str, Any]) -> dict[str, Any]:
     return {"output_path": str(output), "database_path": str(inputs["database_path"])}
 
 
+def run_convert_model(inputs: dict[str, Any]) -> dict[str, Any]:
+    args: list[str] = []
+    _add_cli_option(args, "input_model", inputs["input_model"])
+    _add_cli_option(args, "input_format", inputs.get("input_format"))
+    _add_cli_option(args, "output_model", inputs.get("output_model"))
+    _add_cli_option(args, "output_format", inputs.get("output_format"))
+    return _run_module_as_main("hloc.utils.read_write_model", args)
+
+
+def run_list_configs(inputs: dict[str, Any]) -> dict[str, Any]:
+    from hloc import extract_features, match_dense, match_features
+
+    include_values = bool(inputs.get("include_values", False))
+    configs = {
+        "feature_configs": extract_features.confs,
+        "matcher_configs": match_features.confs,
+        "dense_configs": match_dense.confs,
+    }
+    if include_values:
+        return configs
+    return {name: sorted(values) for name, values in configs.items()}
+
+
+def run_pipeline_aachen(inputs: dict[str, Any]) -> dict[str, Any]:
+    return _run_dataset_pipeline(
+        "hloc.pipelines.Aachen.pipeline",
+        inputs,
+        {
+            "dataset": "datasets/aachen",
+            "outputs": "outputs/aachen",
+            "num_covis": 20,
+            "num_loc": 50,
+        },
+    )
+
+
+def run_pipeline_aachen_v11(inputs: dict[str, Any]) -> dict[str, Any]:
+    return _run_dataset_pipeline(
+        "hloc.pipelines.Aachen_v1_1.pipeline",
+        inputs,
+        {
+            "dataset": "datasets/aachen_v1.1",
+            "outputs": "outputs/aachen_v1.1",
+            "num_covis": 20,
+            "num_loc": 50,
+        },
+    )
+
+
+def run_pipeline_aachen_v11_loftr(inputs: dict[str, Any]) -> dict[str, Any]:
+    return _run_dataset_pipeline(
+        "hloc.pipelines.Aachen_v1_1.pipeline_loftr",
+        inputs,
+        {
+            "dataset": "datasets/aachen_v1.1",
+            "outputs": "outputs/aachen_v1.1",
+            "num_covis": 20,
+            "num_loc": 50,
+        },
+    )
+
+
+def run_pipeline_robotcar(inputs: dict[str, Any]) -> dict[str, Any]:
+    return _run_dataset_pipeline(
+        "hloc.pipelines.RobotCar.pipeline",
+        inputs,
+        {
+            "dataset": "datasets/robotcar",
+            "outputs": "outputs/robotcar",
+            "num_covis": 20,
+            "num_loc": 20,
+        },
+    )
+
+
+def run_pipeline_robotcar_colmap_from_nvm(inputs: dict[str, Any]) -> dict[str, Any]:
+    from hloc.pipelines.RobotCar import colmap_from_nvm
+
+    output = _path(inputs["output_path"])
+    colmap_from_nvm.main(
+        _path(inputs["nvm_path"]),
+        _path(inputs["database_path"]),
+        output,
+        skip_points=bool(inputs.get("skip_points", False)),
+    )
+    return {"output_path": str(output), "database_path": str(inputs["database_path"])}
+
+
+def _parse_cmu_slices(value: Any, all_slices: list[int]) -> list[int]:
+    if value in (None, "", "*"):
+        return list(all_slices)
+    text = str(value)
+    if "-" in text:
+        minimum, maximum = text.split("-", 1)
+        return list(range(int(minimum), int(maximum) + 1))
+    parsed = ast.literal_eval(text)
+    if isinstance(parsed, int):
+        return [parsed]
+    if isinstance(parsed, list) and all(isinstance(item, int) for item in parsed):
+        return parsed
+    raise ValueError("slices must be '*', an int, an inclusive range like 2-6, or a list[int]")
+
+
+def run_pipeline_cmu(inputs: dict[str, Any]) -> dict[str, Any]:
+    pipeline = importlib.import_module("hloc.pipelines.CMU.pipeline")
+    slices = _parse_cmu_slices(inputs.get("slices", "*"), list(pipeline.TEST_SLICES))
+    dataset = _path(inputs.get("dataset", "datasets/cmu_extended"))
+    outputs = _path(inputs.get("outputs", "outputs/aachen_extended"))
+    num_covis = int(inputs.get("num_covis", 20))
+    num_loc = int(inputs.get("num_loc", 10))
+    for slice_id in slices:
+        pipeline.logger.info("Working on slice %s.", slice_id)
+        pipeline.run_slice(f"slice{slice_id}", dataset, outputs, num_covis, num_loc)
+    return {
+        "module": "hloc.pipelines.CMU.pipeline",
+        "slices": slices,
+        "dataset": str(dataset),
+        "outputs": str(outputs),
+    }
+
+
+def run_pipeline_cambridge(inputs: dict[str, Any]) -> dict[str, Any]:
+    args = _pipeline_cli_args(
+        inputs, ["scenes", "overwrite", "dataset", "outputs", "num_covis", "num_loc"]
+    )
+    return _run_module_as_main("hloc.pipelines.Cambridge.pipeline", args)
+
+
+def run_pipeline_seven_scenes(inputs: dict[str, Any]) -> dict[str, Any]:
+    args = _pipeline_cli_args(
+        inputs,
+        ["scenes", "overwrite", "dataset", "outputs", "use_dense_depth", "num_covis"],
+    )
+    return _run_module_as_main("hloc.pipelines.7Scenes.pipeline", args)
+
+
+def run_pipeline_seven_scenes_correct_depth(inputs: dict[str, Any]) -> dict[str, Any]:
+    correct_sfm_with_gt_depth = importlib.import_module(
+        "hloc.pipelines.7Scenes.create_gt_sfm"
+    ).correct_sfm_with_gt_depth
+
+    scenes = inputs.get(
+        "scenes",
+        ["chess", "fire", "heads", "office", "pumpkin", "redkitchen", "stairs"],
+    )
+    dataset = _path(inputs.get("dataset", "datasets/7scenes"))
+    outputs = _path(inputs.get("outputs", "outputs/7Scenes"))
+    corrected: list[dict[str, str]] = []
+    for scene in scenes:
+        sfm_path = outputs / str(scene) / "sfm_superpoint+superglue"
+        depth_path = dataset / f"depth/7scenes_{scene}/train/depth"
+        output_path = outputs / str(scene) / "sfm_superpoint+superglue+depth"
+        correct_sfm_with_gt_depth(sfm_path, depth_path, output_path)
+        corrected.append(
+            {
+                "scene": str(scene),
+                "input_model": str(sfm_path),
+                "depth_path": str(depth_path),
+                "output_model": str(output_path),
+            }
+        )
+    return {"corrected": corrected}
+
+
+def run_pipeline_four_seasons_prepare_reference(inputs: dict[str, Any]) -> dict[str, Any]:
+    args = _pipeline_cli_args(inputs, ["dataset", "outputs"])
+    return _run_module_as_main("hloc.pipelines.4Seasons.prepare_reference", args)
+
+
+def run_pipeline_four_seasons_localize(inputs: dict[str, Any]) -> dict[str, Any]:
+    args = _pipeline_cli_args(inputs, ["sequence", "dataset", "outputs"])
+    return _run_module_as_main("hloc.pipelines.4Seasons.localize", args)
+
+
 RUNNERS = {
     "hloc.extractFeatures": run_extract_features,
     "hloc.pairsExhaustive": run_pairs_exhaustive,
@@ -278,6 +509,19 @@ RUNNERS = {
     "hloc.localizeSfm": run_localize_sfm,
     "hloc.localizeInLoc": run_localize_inloc,
     "hloc.colmapFromNvm": run_colmap_from_nvm,
+    "hloc.convertModel": run_convert_model,
+    "hloc.listConfigs": run_list_configs,
+    "hloc.pipelineAachen": run_pipeline_aachen,
+    "hloc.pipelineAachenV11": run_pipeline_aachen_v11,
+    "hloc.pipelineAachenV11LoFTR": run_pipeline_aachen_v11_loftr,
+    "hloc.pipelineRobotCar": run_pipeline_robotcar,
+    "hloc.pipelineRobotCarColmapFromNvm": run_pipeline_robotcar_colmap_from_nvm,
+    "hloc.pipelineCMU": run_pipeline_cmu,
+    "hloc.pipelineCambridge": run_pipeline_cambridge,
+    "hloc.pipelineSevenScenes": run_pipeline_seven_scenes,
+    "hloc.pipelineSevenScenesCorrectDepth": run_pipeline_seven_scenes_correct_depth,
+    "hloc.pipelineFourSeasonsPrepareReference": run_pipeline_four_seasons_prepare_reference,
+    "hloc.pipelineFourSeasonsLocalize": run_pipeline_four_seasons_localize,
 }
 
 

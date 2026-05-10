@@ -63,12 +63,24 @@ Primary actions:
 - `hloc.extractFeatures`: run `hloc.extract_features`.
 - `hloc.pairsExhaustive`: create exhaustive image pairs.
 - `hloc.pairsRetrieval`: create pairs from global retrieval descriptors.
+- `hloc.pairsCovisibility`: create pairs from a reference model's covisibility graph.
+- `hloc.pairsPoses`: create pairs from pose proximity.
 - `hloc.matchFeatures`: run sparse feature matching.
 - `hloc.matchDense`: run LoFTR-style dense matching.
 - `hloc.reconstruct`: run HLOC reconstruction with pycolmap.
 - `hloc.triangulate`: triangulate against an existing reference model.
 - `hloc.localizeSfm`: localize query images against a reference model.
+- `hloc.localizeInLoc`: run the InLoc localization workflow.
+- `hloc.colmapFromNvm`: convert NVM plus intrinsics into COLMAP format.
+- `hloc.convertModel`: read/write COLMAP binary or text models.
+- `hloc.listConfigs`: list extractor, sparse matcher, and dense matcher configs.
 - `hloc.runPipeline`: extract features, create pairs, match, and reconstruct.
+- Dataset pipelines: `hloc.pipelineAachen`, `hloc.pipelineAachenV11`,
+  `hloc.pipelineAachenV11LoFTR`, `hloc.pipelineRobotCar`, `hloc.pipelineCMU`,
+  `hloc.pipelineCambridge`, `hloc.pipelineSevenScenes`,
+  `hloc.pipelineFourSeasonsPrepareReference`, and `hloc.pipelineFourSeasonsLocalize`.
+- Dataset helpers: `hloc.pipelineRobotCarColmapFromNvm` and
+  `hloc.pipelineSevenScenesCorrectDepth`.
 - `hloc.runModule`: run an allow-listed HLOC module with explicit args.
 
 Example action input:

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from sfmapi_hloc.backend import HLOC_ACTIONS, HlocBackend
+from sfmapi_hloc.backend import HLOC_ACTIONS, HLOC_CLI_MODULES, HlocBackend
 
 
 def _fake_hloc(root: Path) -> Path:
@@ -27,6 +27,9 @@ def test_action_catalog_exposes_hloc_actions(tmp_path: Path) -> None:
     assert "hloc.matchDense" in action_ids
     assert "hloc.reconstruct" in action_ids
     assert "hloc.localizeSfm" in action_ids
+    assert "hloc.convertModel" in action_ids
+    assert "hloc.pipelineAachenV11LoFTR" in action_ids
+    assert "hloc.pipelineFourSeasonsLocalize" in action_ids
     assert "hloc.runPipeline" in action_ids
     assert "hloc.runModule" in action_ids
     assert (
@@ -36,6 +39,50 @@ def test_action_catalog_exposes_hloc_actions(tmp_path: Path) -> None:
     assert backend.capabilities() == set()
     extract = next(action for action in actions if action["action_id"] == "hloc.extractFeatures")
     assert extract["input_schema"]["properties"]["feature_conf"]["enum"]
+
+
+def test_cli_module_allowlist_covers_hloc_command_surfaces() -> None:
+    expected = {
+        "hloc.extract_features",
+        "hloc.match_features",
+        "hloc.match_dense",
+        "hloc.pairs_from_exhaustive",
+        "hloc.pairs_from_retrieval",
+        "hloc.pairs_from_covisibility",
+        "hloc.pairs_from_poses",
+        "hloc.reconstruction",
+        "hloc.triangulation",
+        "hloc.localize_sfm",
+        "hloc.localize_inloc",
+        "hloc.colmap_from_nvm",
+        "hloc.utils.read_write_model",
+        "hloc.pipelines.Aachen.pipeline",
+        "hloc.pipelines.Aachen_v1_1.pipeline",
+        "hloc.pipelines.Aachen_v1_1.pipeline_loftr",
+        "hloc.pipelines.RobotCar.pipeline",
+        "hloc.pipelines.RobotCar.colmap_from_nvm",
+        "hloc.pipelines.CMU.pipeline",
+        "hloc.pipelines.Cambridge.pipeline",
+        "hloc.pipelines.7Scenes.pipeline",
+        "hloc.pipelines.7Scenes.create_gt_sfm",
+        "hloc.pipelines.4Seasons.prepare_reference",
+        "hloc.pipelines.4Seasons.localize",
+    }
+
+    assert expected <= set(HLOC_CLI_MODULES)
+
+
+def test_cli_module_allowlist_matches_checked_out_hloc_scripts() -> None:
+    hloc_root = Path(__file__).resolve().parents[1] / "third_party" / "hloc" / "hloc"
+    discovered: set[str] = set()
+    for path in hloc_root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        if "__main__" not in text and "argparse.ArgumentParser" not in text:
+            continue
+        module = "hloc." + ".".join(path.relative_to(hloc_root).with_suffix("").parts)
+        discovered.add(module)
+
+    assert discovered == set(HLOC_CLI_MODULES)
 
 
 def test_backend_contract_passes(tmp_path: Path) -> None:
@@ -76,6 +123,18 @@ def test_validate_rejects_unknown_input(tmp_path: Path) -> None:
 
     assert result["valid"] is False
     assert "unknown input(s): typo" in result["errors"][0]["message"]
+
+
+def test_validate_rejects_bad_pipeline_scene(tmp_path: Path) -> None:
+    backend = HlocBackend(_fake_hloc(tmp_path / "Hierarchical-Localization"))
+
+    result = backend.validate_backend_action(
+        "hloc.pipelineSevenScenes",
+        {"scenes": ["bad-scene"]},
+    )
+
+    assert result["valid"] is False
+    assert "scenes values must be one of" in result["errors"][0]["message"]
 
 
 def test_run_extract_features_uses_structured_runner(
@@ -150,3 +209,30 @@ def test_run_pipeline_executes_ordered_steps(
         "hloc.reconstruct",
     ]
     assert len(result["steps"]) == 5
+
+
+def test_run_dataset_pipeline_uses_structured_runner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = _fake_hloc(tmp_path / "Hierarchical-Localization")
+    backend = HlocBackend(root, python_executable="python")
+    captured: dict[str, object] = {}
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured["args"] = args
+        Path(args[-1]).write_text(json.dumps({"module": "ok"}), encoding="utf-8")
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = backend.run_backend_action(
+        "hloc.pipelineAachenV11LoFTR",
+        {"dataset": "C:/data/aachen", "outputs": "C:/data/out", "num_loc": 40},
+        workspace=tmp_path / "workspace",
+    )
+
+    assert result["returncode"] == 0
+    args = captured["args"]
+    assert args[:3] == ["python", "-m", "sfmapi_hloc.runner"]
+    assert args[3] == "hloc.pipelineAachenV11LoFTR"
