@@ -222,6 +222,66 @@ def run_match_features(inputs: dict[str, Any]) -> dict[str, Any]:
     return {"matches_path": str(matches_path)}
 
 
+def _safe_create_db_from_model(reconstruction: Any, database_path: Path) -> dict[str, int]:
+    """Create a triangulation DB without touching Reconstruction.rigs.
+
+    pycolmap 4.0.4 on Windows can abort the interpreter when the
+    ``Reconstruction.rigs`` mapping is accessed. Direct rig lookup via
+    each frame's rig id remains stable and preserves the same DB shape.
+    """
+    import pycolmap
+
+    if database_path.exists():
+        database_path.unlink()
+
+    with pycolmap.Database.open(database_path) as db:
+        for _camera_id, camera in reconstruction.cameras.items():
+            db.write_camera(camera, use_camera_id=True)
+
+        seen_rig_ids: set[int] = set()
+        frames = list(reconstruction.frames.items())
+        for _frame_id, frame in frames:
+            rig_id = int(frame.rig_id)
+            if rig_id in seen_rig_ids:
+                continue
+            db.write_rig(reconstruction.rig(rig_id), use_rig_id=True)
+            seen_rig_ids.add(rig_id)
+
+        for _frame_id, frame in frames:
+            db.write_frame(frame, use_frame_id=True)
+
+        for _image_id, image in reconstruction.images.items():
+            db.write_image(image, use_image_id=True)
+
+    return {image.name: image_id for image_id, image in reconstruction.images.items()}
+
+
+def _validate_pairs_reference_model(reference_model: Path, pairs_path: Path) -> None:
+    import pycolmap
+
+    reconstruction = pycolmap.Reconstruction(reference_model)
+    registered_names = {image.name for image in reconstruction.images.values()}
+    missing: set[str] = set()
+    for line in pairs_path.read_text(encoding="utf-8").splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        if len(parts) < 2:
+            raise ValueError(f"invalid pair line in {pairs_path}: {line!r}")
+        name0, name1 = parts[:2]
+        if name0 not in registered_names:
+            missing.add(name0)
+        if name1 not in registered_names:
+            missing.add(name1)
+    if missing:
+        sample = ", ".join(sorted(missing)[:5])
+        suffix = "" if len(missing) <= 5 else f", and {len(missing) - 5} more"
+        raise ValueError(
+            "triangulate pairs must only reference images registered in "
+            f"reference_sfm_model; missing from model: {sample}{suffix}"
+        )
+
+
 def run_match_dense(inputs: dict[str, Any]) -> dict[str, Any]:
     from hloc import match_dense
 
@@ -270,11 +330,15 @@ def run_triangulate(inputs: dict[str, Any]) -> dict[str, Any]:
     from hloc import triangulation
 
     sfm_dir = _path(inputs["sfm_dir"])
+    reference_sfm_model = _path(inputs["reference_sfm_model"])
+    pairs_path = _path(inputs["pairs_path"])
+    _validate_pairs_reference_model(reference_sfm_model, pairs_path)
+    triangulation.create_db_from_model = _safe_create_db_from_model
     reconstruction_obj = triangulation.main(
         sfm_dir,
-        _path(inputs["reference_sfm_model"]),
+        reference_sfm_model,
         _path(inputs["image_dir"]),
-        _path(inputs["pairs_path"]),
+        pairs_path,
         _path(inputs["feature_path"]),
         _path(inputs["matches_path"]),
         skip_geometric_verification=bool(inputs.get("skip_geometric_verification", False)),

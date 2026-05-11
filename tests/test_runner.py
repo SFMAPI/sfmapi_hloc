@@ -5,7 +5,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from sfmapi_hloc.runner import run_pairs_poses
+from sfmapi_hloc.runner import _validate_pairs_reference_model, run_pairs_poses
 
 
 def test_pairs_poses_rejects_impossible_neighbor_count(
@@ -33,3 +33,26 @@ def test_pairs_poses_rejects_impossible_neighbor_count(
                 "num_matched": 1,
             }
         )
+
+
+def test_triangulate_pair_validation_rejects_non_registered_images(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    pycolmap = ModuleType("pycolmap")
+
+    class Reconstruction:
+        def __init__(self, path):
+            self.images = {
+                1: SimpleNamespace(name="registered-a.jpg"),
+                2: SimpleNamespace(name="registered-b.jpg"),
+            }
+
+    pycolmap.Reconstruction = Reconstruction
+    monkeypatch.setitem(sys.modules, "pycolmap", pycolmap)
+
+    pairs = tmp_path / "pairs.txt"
+    pairs.write_text("registered-a.jpg missing.jpg\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"missing from model: missing\.jpg"):
+        _validate_pairs_reference_model(tmp_path / "model", pairs)
