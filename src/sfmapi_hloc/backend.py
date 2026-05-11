@@ -1307,11 +1307,11 @@ class HlocBackend:
             inputs.setdefault("retrieval_conf", "netvlad")
             inputs.setdefault("matcher_conf", "superglue")
 
-    def _progress(self, progress: Any | None, phase: str, current: int, total: int) -> None:
+    def _progress(self, progress: Any | None, _phase: str, current: int, total: int) -> None:
         if progress is None:
             return
         try:
-            progress.phase_progress(phase, current=current, total=total)
+            progress.phase_progress("backend_action", current=current, total=total)
         except Exception:
             return
 

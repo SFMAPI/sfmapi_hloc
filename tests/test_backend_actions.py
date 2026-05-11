@@ -211,6 +211,43 @@ def test_run_pipeline_executes_ordered_steps(
     assert len(result["steps"]) == 5
 
 
+def test_run_pipeline_reports_schema_safe_progress(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = _fake_hloc(tmp_path / "Hierarchical-Localization")
+    backend = HlocBackend(root, python_executable="python")
+    phases: list[str] = []
+
+    class Progress:
+        def phase_progress(self, phase: str, *, current: int, total: int) -> None:
+            phases.append(phase)
+            assert current <= total
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        Path(args[-1]).write_text(json.dumps({}), encoding="utf-8")
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    backend.run_backend_action(
+        "hloc.runPipeline",
+        {
+            "image_dir": str(tmp_path / "images"),
+            "outputs_dir": str(tmp_path / "outputs"),
+            "feature_conf": "sift",
+            "matcher_conf": "NN-ratio",
+            "pairing_mode": "exhaustive",
+            "run_reconstruction": True,
+        },
+        workspace=tmp_path / "workspace",
+        progress=Progress(),
+    )
+
+    assert phases
+    assert set(phases) == {"backend_action"}
+
+
 def test_run_dataset_pipeline_uses_structured_runner(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -61,9 +61,10 @@ def _summary(reconstruction: Any) -> str | None:
 def _camera_mode(value: str) -> Any:
     import pycolmap
 
+    value = str(value).upper()
     try:
-        return pycolmap.CameraMode[str(value)]
-    except KeyError as exc:
+        return getattr(pycolmap.CameraMode, value)
+    except AttributeError as exc:
         allowed = ", ".join(pycolmap.CameraMode.__members__.keys())
         raise ValueError(f"camera_mode must be one of: {allowed}") from exc
 
@@ -182,12 +183,21 @@ def run_pairs_covisibility(inputs: dict[str, Any]) -> dict[str, Any]:
 
 def run_pairs_poses(inputs: dict[str, Any]) -> dict[str, Any]:
     from hloc import pairs_from_poses
+    from hloc.utils.read_write_model import read_images_binary
 
     output = _path(inputs["pairs_path"])
+    model_path = _path(inputs["model_path"])
+    num_matched = int(inputs["num_matched"])
+    image_count = len(read_images_binary(model_path / "images.bin"))
+    if num_matched >= image_count:
+        raise ValueError(
+            "num_matched must be smaller than the number of registered images "
+            f"in the model ({image_count})"
+        )
     pairs_from_poses.main(
-        _path(inputs["model_path"]),
+        model_path,
         output,
-        int(inputs["num_matched"]),
+        num_matched,
         rotation_threshold=float(inputs.get("rotation_threshold", 30.0)),
     )
     return {"pairs_path": str(output)}
@@ -219,11 +229,13 @@ def run_match_dense(inputs: dict[str, Any]) -> dict[str, Any]:
         match_dense.confs[str(inputs.get("dense_conf", "loftr"))],
         inputs.get("conf_override"),
     )
+    outputs_dir = _path(inputs["outputs_dir"])
+    outputs_dir.mkdir(parents=True, exist_ok=True)
     features_path, matches_path = match_dense.main(
         conf,
         _path(inputs["pairs_path"]),
         _path(inputs["image_dir"]),
-        export_dir=_path(inputs["outputs_dir"]),
+        export_dir=outputs_dir,
         matches=_optional_path(inputs.get("matches_path")),
         features=_optional_path(inputs.get("features_path")),
         features_ref=_path_list(inputs.get("features_ref_path")),
@@ -326,6 +338,8 @@ def run_convert_model(inputs: dict[str, Any]) -> dict[str, Any]:
     args: list[str] = []
     _add_cli_option(args, "input_model", inputs["input_model"])
     _add_cli_option(args, "input_format", inputs.get("input_format"))
+    if inputs.get("output_model"):
+        _path(inputs["output_model"]).mkdir(parents=True, exist_ok=True)
     _add_cli_option(args, "output_model", inputs.get("output_model"))
     _add_cli_option(args, "output_format", inputs.get("output_format"))
     return _run_module_as_main("hloc.utils.read_write_model", args)
