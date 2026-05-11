@@ -19,7 +19,6 @@ mcp = [
 
 [project.scripts]
 sfmapi-hloc-api = "sfmapi_hloc.api_launcher:main"
-sfmapi-hloc-api-benchmark = "sfmapi_hloc.api_benchmark:main"
 sfmapi-hloc-info = "sfmapi_hloc.cli:main"
 
 [build-system]

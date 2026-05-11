@@ -103,9 +103,9 @@ uv run ruff check src tests
 The default tests mock subprocess execution and do not require CUDA, pycolmap,
 COLMAP, model weights, or HLOC runtime dependencies.
 
-To verify a running API exposes only reusable actions and keeps benchmark
-workflows out of `/v1/backend/actions`:
+Use the standalone `sfmapi-bench` repository to verify a running API exposes
+only reusable actions and keeps benchmark workflows out of `/v1/backend/actions`:
 
 ```powershell
-uv run sfmapi-hloc-api-benchmark --base-url http://127.0.0.1:8000
+uv run --project ..\sfmapi-bench sfmapi-bench api-surface --preset hloc --base-url http://127.0.0.1:8000
 ```
