@@ -184,24 +184,6 @@ HLOC_ACTIONS: tuple[HlocAction, ...] = (
         gpu_required=False,
     ),
     HlocAction(
-        "hloc.localizeInLoc",
-        "HLOC InLoc localization",
-        "localization",
-        "Run the HLOC InLoc localization workflow.",
-        "hloc.localizeInLoc",
-        "hloc.localize_inloc",
-        gpu_required=False,
-    ),
-    HlocAction(
-        "hloc.colmapFromNvm",
-        "HLOC NVM to COLMAP",
-        "conversion",
-        "Convert an NVM model and intrinsics file into a COLMAP model/database.",
-        "hloc.colmapFromNvm",
-        "hloc.colmap_from_nvm",
-        gpu_required=False,
-    ),
-    HlocAction(
         "hloc.convertModel",
         "HLOC COLMAP model conversion",
         "conversion",
@@ -218,10 +200,31 @@ HLOC_ACTIONS: tuple[HlocAction, ...] = (
         "hloc.listConfigs",
         gpu_required=False,
     ),
+)
+
+HLOC_BENCHMARK_ACTIONS: tuple[HlocAction, ...] = (
+    HlocAction(
+        "hloc.localizeInLoc",
+        "HLOC InLoc localization",
+        "benchmark",
+        "Run the dataset-specific HLOC InLoc localization workflow.",
+        "hloc.localizeInLoc",
+        "hloc.localize_inloc",
+        gpu_required=False,
+    ),
+    HlocAction(
+        "hloc.colmapFromNvm",
+        "HLOC NVM to COLMAP",
+        "benchmark",
+        "Convert benchmark NVM and intrinsics files into a COLMAP model/database.",
+        "hloc.colmapFromNvm",
+        "hloc.colmap_from_nvm",
+        gpu_required=False,
+    ),
     HlocAction(
         "hloc.pipelineAachen",
         "HLOC Aachen pipeline",
-        "pipeline",
+        "benchmark",
         "Run the upstream Aachen Day-Night localization pipeline.",
         "hloc.pipelineAachen",
         "hloc.pipelines.Aachen.pipeline",
@@ -229,7 +232,7 @@ HLOC_ACTIONS: tuple[HlocAction, ...] = (
     HlocAction(
         "hloc.pipelineAachenV11",
         "HLOC Aachen v1.1 pipeline",
-        "pipeline",
+        "benchmark",
         "Run the upstream Aachen Day-Night v1.1 localization pipeline.",
         "hloc.pipelineAachenV11",
         "hloc.pipelines.Aachen_v1_1.pipeline",
@@ -237,7 +240,7 @@ HLOC_ACTIONS: tuple[HlocAction, ...] = (
     HlocAction(
         "hloc.pipelineAachenV11LoFTR",
         "HLOC Aachen v1.1 LoFTR pipeline",
-        "pipeline",
+        "benchmark",
         "Run the upstream Aachen v1.1 dense LoFTR localization pipeline.",
         "hloc.pipelineAachenV11LoFTR",
         "hloc.pipelines.Aachen_v1_1.pipeline_loftr",
@@ -245,7 +248,7 @@ HLOC_ACTIONS: tuple[HlocAction, ...] = (
     HlocAction(
         "hloc.pipelineRobotCar",
         "HLOC RobotCar pipeline",
-        "pipeline",
+        "benchmark",
         "Run the upstream RobotCar Seasons localization pipeline.",
         "hloc.pipelineRobotCar",
         "hloc.pipelines.RobotCar.pipeline",
@@ -253,7 +256,7 @@ HLOC_ACTIONS: tuple[HlocAction, ...] = (
     HlocAction(
         "hloc.pipelineRobotCarColmapFromNvm",
         "HLOC RobotCar NVM to COLMAP",
-        "conversion",
+        "benchmark",
         "Convert RobotCar NVM and database files into a COLMAP model.",
         "hloc.pipelineRobotCarColmapFromNvm",
         "hloc.pipelines.RobotCar.colmap_from_nvm",
@@ -262,7 +265,7 @@ HLOC_ACTIONS: tuple[HlocAction, ...] = (
     HlocAction(
         "hloc.pipelineCMU",
         "HLOC CMU pipeline",
-        "pipeline",
+        "benchmark",
         "Run the upstream Extended CMU Seasons localization pipeline.",
         "hloc.pipelineCMU",
         "hloc.pipelines.CMU.pipeline",
@@ -270,7 +273,7 @@ HLOC_ACTIONS: tuple[HlocAction, ...] = (
     HlocAction(
         "hloc.pipelineCambridge",
         "HLOC Cambridge pipeline",
-        "pipeline",
+        "benchmark",
         "Run the upstream Cambridge Landmarks localization pipeline.",
         "hloc.pipelineCambridge",
         "hloc.pipelines.Cambridge.pipeline",
@@ -278,7 +281,7 @@ HLOC_ACTIONS: tuple[HlocAction, ...] = (
     HlocAction(
         "hloc.pipelineSevenScenes",
         "HLOC 7-Scenes pipeline",
-        "pipeline",
+        "benchmark",
         "Run the upstream 7-Scenes localization pipeline.",
         "hloc.pipelineSevenScenes",
         "hloc.pipelines.7Scenes.pipeline",
@@ -286,7 +289,7 @@ HLOC_ACTIONS: tuple[HlocAction, ...] = (
     HlocAction(
         "hloc.pipelineSevenScenesCorrectDepth",
         "HLOC 7-Scenes depth correction",
-        "pipeline",
+        "benchmark",
         "Correct 7-Scenes SfM models with ground-truth depth.",
         "hloc.pipelineSevenScenesCorrectDepth",
         "hloc.pipelines.7Scenes.create_gt_sfm",
@@ -294,7 +297,7 @@ HLOC_ACTIONS: tuple[HlocAction, ...] = (
     HlocAction(
         "hloc.pipelineFourSeasonsPrepareReference",
         "HLOC 4Seasons reference preparation",
-        "pipeline",
+        "benchmark",
         "Prepare the upstream 4Seasons reference SfM model.",
         "hloc.pipelineFourSeasonsPrepareReference",
         "hloc.pipelines.4Seasons.prepare_reference",
@@ -302,7 +305,7 @@ HLOC_ACTIONS: tuple[HlocAction, ...] = (
     HlocAction(
         "hloc.pipelineFourSeasonsLocalize",
         "HLOC 4Seasons localization",
-        "pipeline",
+        "benchmark",
         "Run the upstream 4Seasons sequence localization workflow.",
         "hloc.pipelineFourSeasonsLocalize",
         "hloc.pipelines.4Seasons.localize",
@@ -310,6 +313,10 @@ HLOC_ACTIONS: tuple[HlocAction, ...] = (
 )
 _ACTION_BY_ID = {action.action_id: action for action in HLOC_ACTIONS}
 HLOC_CLI_MODULES = tuple(sorted({action.module for action in HLOC_ACTIONS if action.module}))
+HLOC_BENCHMARK_CLI_MODULES = tuple(
+    sorted({action.module for action in HLOC_BENCHMARK_ACTIONS if action.module})
+)
+HLOC_UPSTREAM_CLI_MODULES = tuple(sorted({*HLOC_CLI_MODULES, *HLOC_BENCHMARK_CLI_MODULES}))
 _SCRIPT_MODULES = set(HLOC_CLI_MODULES)
 
 
@@ -1321,7 +1328,10 @@ __all__ = [
     "DENSE_CONFIGS",
     "FEATURE_CONFIGS",
     "HLOC_ACTIONS",
+    "HLOC_BENCHMARK_ACTIONS",
+    "HLOC_BENCHMARK_CLI_MODULES",
     "HLOC_CLI_MODULES",
+    "HLOC_UPSTREAM_CLI_MODULES",
     "MATCHER_CONFIGS",
     "RETRIEVAL_CONFIGS",
     "HlocBackend",

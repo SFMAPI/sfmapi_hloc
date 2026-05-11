@@ -70,18 +70,16 @@ Primary actions:
 - `hloc.reconstruct`: run HLOC reconstruction with pycolmap.
 - `hloc.triangulate`: triangulate against an existing reference model.
 - `hloc.localizeSfm`: localize query images against a reference model.
-- `hloc.localizeInLoc`: run the InLoc localization workflow.
-- `hloc.colmapFromNvm`: convert NVM plus intrinsics into COLMAP format.
 - `hloc.convertModel`: read/write COLMAP binary or text models.
 - `hloc.listConfigs`: list extractor, sparse matcher, and dense matcher configs.
 - `hloc.runPipeline`: extract features, create pairs, match, and reconstruct.
-- Dataset pipelines: `hloc.pipelineAachen`, `hloc.pipelineAachenV11`,
-  `hloc.pipelineAachenV11LoFTR`, `hloc.pipelineRobotCar`, `hloc.pipelineCMU`,
-  `hloc.pipelineCambridge`, `hloc.pipelineSevenScenes`,
-  `hloc.pipelineFourSeasonsPrepareReference`, and `hloc.pipelineFourSeasonsLocalize`.
-- Dataset helpers: `hloc.pipelineRobotCarColmapFromNvm` and
-  `hloc.pipelineSevenScenesCorrectDepth`.
-- `hloc.runModule`: run an allow-listed HLOC module with explicit args.
+- `hloc.runModule`: run an allow-listed reusable HLOC module with explicit args.
+
+Benchmark and dataset-specific HLOC scripts are not exposed as backend API
+actions. Workflows such as Aachen, RobotCar, CMU, Cambridge, 7-Scenes,
+4Seasons, InLoc, and NVM benchmark conversion depend on fixed dataset layouts
+and should remain separate utility/evaluation code rather than normal API
+features.
 
 Example action input:
 
@@ -104,3 +102,10 @@ uv run ruff check src tests
 
 The default tests mock subprocess execution and do not require CUDA, pycolmap,
 COLMAP, model weights, or HLOC runtime dependencies.
+
+To verify a running API exposes only reusable actions and keeps benchmark
+workflows out of `/v1/backend/actions`:
+
+```powershell
+uv run sfmapi-hloc-api-benchmark --base-url http://127.0.0.1:8000
+```
