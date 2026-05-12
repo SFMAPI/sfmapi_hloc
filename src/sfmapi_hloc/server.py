@@ -1,5 +1,5 @@
 """ASGI entrypoint that registers the HLOC backend before sfmapi starts."""
-# ruff: noqa: E402,I001
+# ruff: noqa: E402
 
 from __future__ import annotations
 
@@ -13,11 +13,13 @@ os.environ.setdefault("SFMAPI_QUEUE_BACKEND", "inline")
 os.environ.setdefault("SFMAPI_INLINE_TASKS", "true")
 
 from sfmapi_hloc.backend import configure_hloc_environment
+from sfmapi_hloc.plugin import plugin
 
 configure_hloc_environment(validate=bool(os.environ.get("SFMAPI_HLOC_ROOT")))
 
-import sfmapi_hloc  # noqa: F401 - import side effect registers backend
-
+from app.adapters.registry import register_backend
 from app.main import create_app
+
+plugin.register(register_backend)
 
 app = create_app()
