@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -19,18 +18,16 @@ def test_sfmapi_http_discovery_surfaces_hloc_actions(
     tmp_path: Path,
 ) -> None:
     pytest.importorskip("fastapi")
-    from app.adapters.registry import register_backend
-    from app.core.capabilities import reset_capabilities_cache
-    from app.core.config import reset_settings_for_tests
-    from app.db.session import reset_engine_for_tests
     from fastapi.testclient import TestClient
+    from sfmapi.runtime import register_backend
+    from sfmapi.testing import reset_runtime_for_tests_sync
 
     root = _fake_hloc(tmp_path / "Hierarchical-Localization")
     monkeypatch.setenv("SFMAPI_BACKEND", "hloc")
     monkeypatch.setenv("SFMAPI_MCP_MODE", "off")
-    from app.main import create_app
+    from sfmapi.runtime import create_app
 
-    settings = reset_settings_for_tests(
+    reset_runtime_for_tests_sync(
         ephemeral=True,
         db_url="sqlite+aiosqlite:///file::memory:?cache=shared&uri=true",
         blob_backend="memory",
@@ -38,8 +35,6 @@ def test_sfmapi_http_discovery_surfaces_hloc_actions(
         inline_tasks=True,
         workspace_root=tmp_path / "workspace",
     )
-    asyncio.run(reset_engine_for_tests(settings))
-    reset_capabilities_cache()
     register_backend("hloc", lambda: HlocBackend(root))
 
     with TestClient(create_app()) as client:

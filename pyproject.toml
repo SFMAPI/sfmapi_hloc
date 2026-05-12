@@ -6,16 +6,14 @@ readme = "README.md"
 license = { text = "AGPL-3.0-or-later" }
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "sfmapi>=0.0.1,<0.1",
 ]
 
 [project.optional-dependencies]
-server = [
-    "sfmapi>=0.0.1,<0.1",
-]
+server = []
 dev = [
     "pytest>=8.3",
     "ruff>=0.8",
-    "sfmapi>=0.0.1,<0.1",
 ]
 mcp = [
     "fastmcp==3.2.4",

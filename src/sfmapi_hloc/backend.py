@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from app.core.errors import CapabilityUnavailableError, NotFoundError, ValidationError
+    from sfmapi.errors import CapabilityUnavailableError, NotFoundError, ValidationError
 except ModuleNotFoundError:  # pragma: no cover - allows adapter tests without sfmapi installed
 
     class CapabilityUnavailableError(RuntimeError):  # type: ignore[no-redef]

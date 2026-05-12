@@ -98,9 +98,8 @@ def test_cli_module_allowlist_matches_checked_out_hloc_scripts() -> None:
 
 
 def test_backend_contract_passes(tmp_path: Path) -> None:
-    pytest.importorskip("app.adapters.backend_contract")
-    from app.adapters.backend import Backend, SfmBackend
-    from app.adapters.backend_contract import assert_backend_contract
+    pytest.importorskip("sfmapi.backends")
+    from sfmapi.backends import Backend, SfmBackend, assert_backend_contract
 
     backend = HlocBackend(_fake_hloc(tmp_path / "Hierarchical-Localization"))
     assert isinstance(backend, Backend)
