@@ -359,7 +359,7 @@ def configure_hloc_environment(
 
 class HlocBackend:
     name = "hloc"
-    version = "0.2.0"
+    version = "0.0.1"
     vendor = "Hierarchical Localization"
 
     def __init__(

@@ -1,0 +1,53 @@
+name: Integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_real_tool_tests:
+        description: "Run tests that require installed external tools or sample data."
+        required: false
+        default: "false"
+        type: boolean
+  schedule:
+    - cron: "53 7 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/checkout@v4
+        with:
+          repository: SFMAPI/sfmapi
+          path: .deps/sfmapi
+      - uses: astral-sh/setup-uv@v7
+      - name: Install
+        run: |
+          uv venv --seed
+          uv pip install -e .deps/sfmapi
+          uv pip install pytest ruff build
+          uv pip install -e . --no-deps
+      - name: Run lightweight integration tests
+        run: |
+          set +e
+          .venv/bin/python -m pytest -q -m "(integration or e2e) and not needs_colmap and not needs_pycolmap and not needs_sample_data and not gpu and not slow"
+          code=$?
+          set -e
+          if [ "$code" -eq 5 ]; then
+            echo "No lightweight integration tests selected."
+            exit 0
+          fi
+          exit "$code"
+      - name: Run real tool tests
+        if: github.event_name == 'workflow_dispatch' && inputs.run_real_tool_tests
+        run: .venv/bin/python -m pytest -q -m "needs_colmap or needs_pycolmap or needs_sample_data or gpu or slow"
