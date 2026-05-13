@@ -30,8 +30,8 @@ jobs:
           uv pip install pytest ruff build
           uv pip install -e . --no-deps
       - name: Ruff
-        run: uv run ruff check src tests
+        run: .venv/bin/ruff check src tests
       - name: Test
-        run: uv run pytest -q -m "not needs_colmap and not needs_pycolmap and not needs_sample_data and not gpu and not slow and not integration and not e2e"
+        run: .venv/bin/python -m pytest -q -m "not needs_colmap and not needs_pycolmap and not needs_sample_data and not gpu and not slow and not integration and not e2e"
       - name: Build source distribution
-        run: uv run python -m build --sdist
+        run: .venv/bin/python -m build --sdist
