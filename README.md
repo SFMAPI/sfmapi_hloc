@@ -109,3 +109,11 @@ only reusable actions and keeps benchmark workflows out of `/v1/backend/actions`
 ```powershell
 uv run --project ..\sfmapi-bench sfmapi-bench api-surface --preset hloc --base-url http://127.0.0.1:8000
 ```
+
+## License
+
+The sfmapi wrapper code is licensed under `AGPL-3.0-or-later`; see `LICENSE`.
+Upstream HLOC is included as a submodule under `third_party/hloc` and remains
+`Apache-2.0`; see `LICENSES/Hierarchical-Localization-Apache-2.0.txt` and
+`THIRD_PARTY_NOTICES.md`. Model weights and datasets used with HLOC may carry
+separate terms.
