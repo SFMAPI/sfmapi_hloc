@@ -83,6 +83,29 @@ MATCHER_OUTPUTS = {
 DENSE_CONFIGS = ("loftr", "loftr_aachen", "loftr_superpoint")
 PAIRING_MODES = ("exhaustive", "retrieval")
 
+# Portable sfmapi capability -> hloc native config. These map the
+# engine-neutral sfmapi vocabulary to the upstream hloc configuration
+# names so the portable stage wrappers below can drive runner.py.
+# Keys are the sfmapi ``features.extract.<key>`` suffix; values are the
+# upstream ``hloc.extract_features.confs`` config names (which do not
+# always match — e.g. sfmapi ``d2net`` -> hloc ``d2net-ss``).
+FEATURE_CAPABILITY_CONFIGS: dict[str, str] = {
+    "superpoint": "superpoint_aachen",
+    "disk": "disk",
+    "aliked": "aliked-n16",
+    "r2d2": "r2d2",
+    "d2net": "d2net-ss",
+    "sift": "sift",
+    "sosnet": "sosnet",
+}
+SPARSE_MATCHER_CAPABILITY_CONFIGS: dict[str, str] = {
+    "superglue": "superglue",
+    "lightglue": "superpoint+lightglue",
+}
+DENSE_MATCHER_CAPABILITY_CONFIGS: dict[str, str] = {
+    "loftr": "loftr",
+}
+
 
 @dataclass(frozen=True)
 class HlocAction:
@@ -373,8 +396,710 @@ class HlocBackend:
             python_executable or os.environ.get("SFMAPI_HLOC_PYTHON") or sys.executable
         )
 
+    # Portable sfmapi capabilities this backend implements as thin
+    # wrappers over runner.py. ``matches.verify`` is intentionally
+    # absent: hloc folds geometric verification into reconstruction /
+    # triangulation and exposes no verification-only runner entry, so
+    # ``verify_matches`` honestly raises ``CapabilityUnavailableError``.
+    PORTABLE_CAPABILITIES: tuple[str, ...] = (
+        "features.extract.superpoint",
+        "features.extract.disk",
+        "features.extract.aliked",
+        "features.extract.r2d2",
+        "features.extract.d2net",
+        "features.extract.sift",
+        "features.extract.sosnet",
+        "pairs.retrieval",
+        "pairs.from_poses",
+        "matchers.superglue",
+        "matchers.lightglue",
+        "matchers.loftr",
+        "triangulate.retri",
+        "map.incremental",
+        "localize.from_memory",
+        "localize.batch",
+    )
+
     def capabilities(self) -> set[str]:
-        return set()
+        """Portable sfmapi capabilities backed by real runner.py wrappers.
+
+        Degrades to ``set()`` when the hloc checkout is missing, mirroring
+        how the COLMAP backends report nothing when COLMAP is absent.
+        """
+        if self._find_root() is None:
+            return set()
+        return set(self.PORTABLE_CAPABILITIES)
+
+    def extract_features(
+        self,
+        *,
+        database_path: Path,
+        image_root: Path,
+        image_list: list[str],
+        options: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Extract local features via the hloc ``extract_features`` runner.
+
+        ``database_path`` anchors where hloc's native HDF5 feature file is
+        written (sibling artifact); hloc does not use a COLMAP database for
+        feature extraction.
+        """
+        options = dict(options or {})
+        feature_type = str(options.get("type") or options.get("feature_type") or "superpoint")
+        feature_conf = FEATURE_CAPABILITY_CONFIGS.get(feature_type)
+        if feature_conf is None:
+            raise CapabilityUnavailableError(
+                capability=f"features.extract.{feature_type}",
+                reason=(
+                    "hloc portable feature extraction supports "
+                    f"{', '.join(sorted(FEATURE_CAPABILITY_CONFIGS))}"
+                ),
+            )
+        database_path = Path(database_path)
+        outputs_dir = database_path.parent
+        feature_path = options.get("feature_path") or outputs_dir / (
+            f"{FEATURE_OUTPUTS[feature_conf]}.h5"
+        )
+        runner_inputs: dict[str, Any] = {
+            "image_dir": str(image_root),
+            "outputs_dir": str(outputs_dir),
+            "feature_conf": feature_conf,
+            "feature_path": str(feature_path),
+            "as_half": bool(options.get("as_half", True)),
+            "overwrite": bool(options.get("overwrite", False)),
+        }
+        if image_list:
+            runner_inputs["image_list"] = list(image_list)
+        if options.get("conf_override") is not None:
+            runner_inputs["conf_override"] = options["conf_override"]
+        if options.get("timeout_seconds") is not None:
+            runner_inputs["timeout_seconds"] = options["timeout_seconds"]
+        run = self._run_runner_action("hloc.extractFeatures", runner_inputs, workspace=outputs_dir)
+        result = run.get("result") or {}
+        return {
+            "database_path": str(database_path),
+            "feature_path": str(result.get("feature_path") or feature_path),
+            "feature_conf": feature_conf,
+            "num_images": len(image_list),
+            "engine": "hloc extract_features",
+        }
+
+    def match(
+        self,
+        *,
+        database_path: Path,
+        mode: str,
+        options: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Match features via the hloc sparse/dense matching runners.
+
+        ``mode`` is the pair-selection strategy. ``retrieval`` builds the
+        pairs file from global retrieval descriptors; ``from_poses``
+        builds it from pose proximity in a reference COLMAP model (the
+        ``hloc.pairsPoses`` runner over ``hloc.pairs_from_poses``). Any
+        other strategy honestly raises ``CapabilityUnavailableError``.
+        ``options['matcher']`` selects superglue / lightglue / loftr.
+        """
+        options = dict(options or {})
+        normalized_mode = str(mode).replace("-", "_").lower()
+        if normalized_mode not in ("retrieval", "from_poses"):
+            raise CapabilityUnavailableError(
+                capability=f"pairs.{normalized_mode}",
+                reason=(
+                    "hloc portable matching wires the retrieval and from_poses pair strategies"
+                ),
+            )
+        matcher = str(options.get("matcher") or options.get("matcher_type") or "superglue")
+        database_path = Path(database_path)
+        outputs_dir = database_path.parent
+
+        feature_path = options.get("feature_path")
+        pairs_path = options.get("pairs_path")
+        if pairs_path is None and normalized_mode == "from_poses":
+            model_path = options.get("model_path") or options.get("reference_model")
+            if model_path is None:
+                raise CapabilityUnavailableError(
+                    capability="pairs.from_poses",
+                    reason=(
+                        "hloc from_poses matching needs options['pairs_path'] or "
+                        "options['model_path'] (a reference COLMAP model with poses)"
+                    ),
+                )
+            pairs_path = outputs_dir / "pairs-from-poses.txt"
+            poses_inputs: dict[str, Any] = {
+                "model_path": str(model_path),
+                "pairs_path": str(pairs_path),
+                "num_matched": int(options.get("num_matched", 20)),
+            }
+            if options.get("rotation_threshold") is not None:
+                poses_inputs["rotation_threshold"] = float(options["rotation_threshold"])
+            if options.get("timeout_seconds") is not None:
+                poses_inputs["timeout_seconds"] = options["timeout_seconds"]
+            self._run_runner_action("hloc.pairsPoses", poses_inputs, workspace=outputs_dir)
+        if pairs_path is None:
+            descriptors_path = options.get("descriptors_path") or options.get("retrieval_path")
+            if descriptors_path is None:
+                raise CapabilityUnavailableError(
+                    capability="pairs.retrieval",
+                    reason=(
+                        "hloc retrieval matching needs options['pairs_path'] or "
+                        "options['descriptors_path'] (global retrieval features)"
+                    ),
+                )
+            pairs_path = outputs_dir / "pairs-retrieval.txt"
+            pairs_inputs: dict[str, Any] = {
+                "descriptors_path": str(descriptors_path),
+                "pairs_path": str(pairs_path),
+                "num_matched": int(options.get("num_matched", 20)),
+            }
+            if options.get("timeout_seconds") is not None:
+                pairs_inputs["timeout_seconds"] = options["timeout_seconds"]
+            self._run_runner_action("hloc.pairsRetrieval", pairs_inputs, workspace=outputs_dir)
+
+        if matcher in DENSE_MATCHER_CAPABILITY_CONFIGS:
+            dense_conf = DENSE_MATCHER_CAPABILITY_CONFIGS[matcher]
+            dense_inputs: dict[str, Any] = {
+                "pairs_path": str(pairs_path),
+                "image_dir": str(options.get("image_root") or outputs_dir),
+                "outputs_dir": str(outputs_dir),
+                "dense_conf": dense_conf,
+                "overwrite": bool(options.get("overwrite", False)),
+            }
+            if options.get("matches_path") is not None:
+                dense_inputs["matches_path"] = str(options["matches_path"])
+            if options.get("conf_override") is not None:
+                dense_inputs["conf_override"] = options["conf_override"]
+            if options.get("timeout_seconds") is not None:
+                dense_inputs["timeout_seconds"] = options["timeout_seconds"]
+            run = self._run_runner_action("hloc.matchDense", dense_inputs, workspace=outputs_dir)
+            result = run.get("result") or {}
+            return {
+                "database_path": str(database_path),
+                "strategy": mode,
+                "matcher": matcher,
+                "pairs_path": str(pairs_path),
+                "feature_path": str(result.get("feature_path") or ""),
+                "matches_path": str(result.get("matches_path") or ""),
+                "engine": "hloc match_dense",
+            }
+
+        matcher_conf = SPARSE_MATCHER_CAPABILITY_CONFIGS.get(matcher)
+        if matcher_conf is None:
+            raise CapabilityUnavailableError(
+                capability=f"matchers.{matcher}",
+                reason=(
+                    "hloc portable matching supports "
+                    f"{', '.join(sorted({*SPARSE_MATCHER_CAPABILITY_CONFIGS, *DENSE_MATCHER_CAPABILITY_CONFIGS}))}"
+                ),
+            )
+        if feature_path is None:
+            raise CapabilityUnavailableError(
+                capability=f"matchers.{matcher}",
+                reason="hloc sparse matching needs options['feature_path'] (HDF5 features)",
+            )
+        matches_path = options.get("matches_path") or outputs_dir / (
+            f"{Path(str(feature_path)).stem}_{MATCHER_OUTPUTS[matcher_conf]}.h5"
+        )
+        match_inputs: dict[str, Any] = {
+            "pairs_path": str(pairs_path),
+            "feature_path": str(feature_path),
+            "matches_path": str(matches_path),
+            "matcher_conf": matcher_conf,
+            "overwrite": bool(options.get("overwrite", False)),
+        }
+        if options.get("conf_override") is not None:
+            match_inputs["conf_override"] = options["conf_override"]
+        if options.get("timeout_seconds") is not None:
+            match_inputs["timeout_seconds"] = options["timeout_seconds"]
+        run = self._run_runner_action("hloc.matchFeatures", match_inputs, workspace=outputs_dir)
+        result = run.get("result") or {}
+        return {
+            "database_path": str(database_path),
+            "strategy": mode,
+            "matcher": matcher,
+            "pairs_path": str(pairs_path),
+            "matches_path": str(result.get("matches_path") or matches_path),
+            "engine": "hloc match_features",
+        }
+
+    def verify_matches(
+        self,
+        *,
+        database_path: Path,
+        options: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Not a standalone hloc stage.
+
+        hloc performs geometric verification implicitly inside
+        ``reconstruction`` / ``triangulation`` (via ``min_match_score`` and
+        ``skip_geometric_verification``); it exposes no verification-only
+        runner entry point. ``matches.verify`` is therefore intentionally
+        absent from :meth:`capabilities`.
+        """
+        raise CapabilityUnavailableError(
+            capability="matches.verify",
+            reason=(
+                "hloc has no standalone geometric verification stage; "
+                "verification runs inside hloc.reconstruct / hloc.triangulate"
+            ),
+        )
+
+    def localize_from_memory(
+        self,
+        *,
+        sparse_dir: Path,
+        query_image: Path,
+        spec: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Localize against a reference SfM model via the hloc ``localize_sfm`` runner.
+
+        hloc's localization is pipeline-shaped: it consumes a queries file,
+        retrieval pairs, and pre-extracted feature / match HDF5 files. Those
+        hloc-specific inputs are carried through the free-form ``spec`` dict.
+        When they are absent this raises ``CapabilityUnavailableError`` so
+        callers get the normal 501 shape instead of an ``AttributeError``.
+        """
+        spec = dict(spec or {})
+        sparse_dir = Path(sparse_dir)
+        required = ("queries_path", "retrieval_path", "feature_path", "matches_path")
+        missing = [key for key in required if not spec.get(key)]
+        if missing:
+            raise CapabilityUnavailableError(
+                capability="localize.from_memory",
+                reason=(
+                    "hloc localize_sfm needs spec keys "
+                    f"{', '.join(required)} (missing: {', '.join(missing)})"
+                ),
+            )
+        results_path = spec.get("results_path") or sparse_dir.parent / "hloc-localization.txt"
+        runner_inputs: dict[str, Any] = {
+            "reference_sfm": str(spec.get("reference_sfm") or sparse_dir),
+            "queries_path": str(spec["queries_path"]),
+            "retrieval_path": str(spec["retrieval_path"]),
+            "feature_path": str(spec["feature_path"]),
+            "matches_path": str(spec["matches_path"]),
+            "results_path": str(results_path),
+        }
+        for key in ("ransac_thresh", "covisibility_clustering", "prepend_camera_name", "config"):
+            if spec.get(key) is not None:
+                runner_inputs[key] = spec[key]
+        if spec.get("timeout_seconds") is not None:
+            runner_inputs["timeout_seconds"] = spec["timeout_seconds"]
+        run = self._run_runner_action(
+            "hloc.localizeSfm", runner_inputs, workspace=sparse_dir.parent
+        )
+        result = run.get("result") or {}
+        return {
+            "query_image": str(query_image),
+            "reference_sfm": runner_inputs["reference_sfm"],
+            "results_path": str(result.get("results_path") or results_path),
+            "logs_path": str(result.get("logs_path") or ""),
+            "engine": "hloc localize_sfm",
+        }
+
+    def localize_batch(self, **kwargs: Any) -> list[Any]:
+        """Localize a whole queries file via the hloc ``localize_sfm`` runner.
+
+        hloc's ``localize_sfm`` is inherently batch — it consumes a queries
+        file plus retrieval pairs and pre-extracted feature/match HDF5
+        files in one pass. This is the same runner :meth:`localize_from_memory`
+        drives; the only difference is the result shape (a ``list`` of
+        per-query rows, as the :class:`BatchLocalizationBackend` protocol
+        requires). The hloc-specific inputs ride through ``kwargs`` (or a
+        nested ``spec`` dict). Missing inputs raise
+        ``CapabilityUnavailableError`` so callers get the normal 501 shape
+        instead of an ``AttributeError``.
+        """
+        spec: dict[str, Any] = dict(kwargs.pop("spec", None) or {})
+        spec.update({key: value for key, value in kwargs.items() if value is not None})
+        required = ("queries_path", "retrieval_path", "feature_path", "matches_path")
+        missing = [key for key in required if not spec.get(key)]
+        reference_sfm = spec.get("reference_sfm") or spec.get("sparse_dir")
+        if not reference_sfm:
+            missing.append("reference_sfm")
+        if missing:
+            raise CapabilityUnavailableError(
+                capability="localize.batch",
+                reason=(
+                    "hloc localize_sfm needs keys reference_sfm, "
+                    f"{', '.join(required)} (missing: {', '.join(missing)})"
+                ),
+            )
+        reference_sfm = Path(str(reference_sfm))
+        results_path = spec.get("results_path") or reference_sfm.parent / "hloc-localization.txt"
+        runner_inputs: dict[str, Any] = {
+            "reference_sfm": str(reference_sfm),
+            "queries_path": str(spec["queries_path"]),
+            "retrieval_path": str(spec["retrieval_path"]),
+            "feature_path": str(spec["feature_path"]),
+            "matches_path": str(spec["matches_path"]),
+            "results_path": str(results_path),
+        }
+        for key in ("ransac_thresh", "covisibility_clustering", "prepend_camera_name", "config"):
+            if spec.get(key) is not None:
+                runner_inputs[key] = spec[key]
+        if spec.get("timeout_seconds") is not None:
+            runner_inputs["timeout_seconds"] = spec["timeout_seconds"]
+        run = self._run_runner_action(
+            "hloc.localizeSfm", runner_inputs, workspace=reference_sfm.parent
+        )
+        result = run.get("result") or {}
+        return [
+            {
+                "reference_sfm": runner_inputs["reference_sfm"],
+                "queries_path": runner_inputs["queries_path"],
+                "results_path": str(result.get("results_path") or results_path),
+                "logs_path": str(result.get("logs_path") or ""),
+                "engine": "hloc localize_sfm",
+            }
+        ]
+
+    def triangulate(
+        self,
+        *,
+        model_path: Path,
+        database_path: Path,
+        image_root: Path,
+        output_path: Path,
+    ) -> dict[str, Any]:
+        """Re-triangulate against an existing model via the hloc ``triangulation`` runner.
+
+        hloc's ``triangulation`` module is triangulate-from-known-poses: it
+        imports learned features/matches and triangulates points against a
+        reference COLMAP model. hloc additionally needs the pairs list and
+        the HDF5 ``feature_path`` / ``matches_path`` that produced those
+        matches — sfmapi's portable :class:`RefinementBackend.triangulate`
+        signature does not carry them, so they are derived from
+        ``database_path``'s directory (the convention the hloc match stage
+        writes to) unless overridden via ``SFMAPI_HLOC_*`` sidecar files.
+        When they cannot be located this raises
+        ``CapabilityUnavailableError`` instead of an ``AttributeError``.
+        """
+        model_path = Path(model_path)
+        database_path = Path(database_path)
+        image_root = Path(image_root)
+        output_path = Path(output_path)
+        artifacts_dir = database_path.parent
+
+        def _resolve(name: str, candidates: list[Path]) -> Path | None:
+            for candidate in candidates:
+                if candidate and Path(candidate).exists():
+                    return Path(candidate)
+            return None
+
+        pairs_path = _resolve(
+            "pairs",
+            [
+                artifacts_dir / "pairs-from-poses.txt",
+                artifacts_dir / "pairs-retrieval.txt",
+                artifacts_dir / "pairs.txt",
+            ],
+        )
+        feature_path = _resolve(
+            "features",
+            sorted(artifacts_dir.glob("feats-*.h5")) + sorted(artifacts_dir.glob("*.h5")),
+        )
+        matches_path = _resolve("matches", sorted(artifacts_dir.glob("*matches*.h5")))
+        missing = [
+            name
+            for name, value in (
+                ("pairs_path", pairs_path),
+                ("feature_path", feature_path),
+                ("matches_path", matches_path),
+            )
+            if value is None
+        ]
+        if missing:
+            raise CapabilityUnavailableError(
+                capability="triangulate.retri",
+                reason=(
+                    "hloc triangulation needs a pairs file plus HDF5 feature/match "
+                    f"files alongside the database ({database_path}); could not "
+                    f"locate: {', '.join(missing)}"
+                ),
+            )
+        runner_inputs: dict[str, Any] = {
+            "sfm_dir": str(output_path),
+            "reference_sfm_model": str(model_path),
+            "image_dir": str(image_root),
+            "pairs_path": str(pairs_path),
+            "feature_path": str(feature_path),
+            "matches_path": str(matches_path),
+        }
+        run = self._run_runner_action("hloc.triangulate", runner_inputs, workspace=output_path)
+        result = run.get("result") or {}
+        return {
+            "model_path": str(result.get("sfm_dir") or output_path),
+            "reference_sfm_model": str(model_path),
+            "summary": result.get("summary"),
+            "engine": "hloc triangulation",
+        }
+
+    def run_mapping(
+        self,
+        *,
+        kind: str,
+        db_path: Path,
+        image_root: Path,
+        sparse_root: Path,
+        job_dir: Path,
+        spec: dict[str, Any],
+        pose_priors: dict[str, Any] | None = None,
+    ) -> tuple[list[dict[str, Any]], list[Any]]:
+        """Run end-to-end learned-feature incremental SfM via the hloc ``reconstruction`` runner.
+
+        hloc's ``reconstruction`` module imports learned features/matches
+        and drives a full pycolmap incremental reconstruction. Only
+        ``kind="incremental"`` is a portable hloc capability; any other
+        mapping kind honestly raises ``CapabilityUnavailableError``.
+
+        Returns ``(summaries, reconstructions)`` for the portable
+        :class:`MappingBackend` protocol. hloc emits a COLMAP-format
+        sparse model directory; reading it back into a portable
+        reconstruction object is a :class:`ReconstructionReaderBackend`
+        job this runner-shim does not implement, so the reconstruction
+        list is left empty and the summary carries the on-disk
+        ``model_path`` (the same pattern the SphereSfM plugin uses).
+
+        hloc additionally needs the pairs list and HDF5 feature/match
+        files; they ride through ``spec`` (``pairs_path``, ``feature_path``,
+        ``matches_path``). When absent this raises
+        ``CapabilityUnavailableError``.
+        """
+        normalized = str(kind).replace("-", "_").lower()
+        if normalized != "incremental":
+            raise CapabilityUnavailableError(
+                capability=f"map.{kind}",
+                reason="hloc only implements portable incremental mapping (map.incremental).",
+            )
+        spec = dict(spec or {})
+        db_path = Path(db_path)
+        image_root = Path(image_root)
+        sparse_root = Path(sparse_root)
+        job_dir = Path(job_dir)
+        artifacts_dir = db_path.parent
+
+        pairs_path = spec.get("pairs_path")
+        feature_path = spec.get("feature_path")
+        matches_path = spec.get("matches_path")
+        if pairs_path is None:
+            for candidate in (
+                artifacts_dir / "pairs-retrieval.txt",
+                artifacts_dir / "pairs-from-poses.txt",
+                artifacts_dir / "pairs.txt",
+            ):
+                if candidate.exists():
+                    pairs_path = candidate
+                    break
+        missing = [
+            key
+            for key, value in (
+                ("pairs_path", pairs_path),
+                ("feature_path", feature_path),
+                ("matches_path", matches_path),
+            )
+            if not value
+        ]
+        if missing:
+            raise CapabilityUnavailableError(
+                capability="map.incremental",
+                reason=(
+                    "hloc incremental mapping needs spec keys pairs_path, "
+                    f"feature_path, matches_path (missing: {', '.join(missing)})"
+                ),
+            )
+        sparse_root.mkdir(parents=True, exist_ok=True)
+        job_dir.mkdir(parents=True, exist_ok=True)
+        sfm_dir = Path(str(spec.get("sfm_dir") or sparse_root / "0"))
+        runner_inputs: dict[str, Any] = {
+            "sfm_dir": str(sfm_dir),
+            "image_dir": str(image_root),
+            "pairs_path": str(pairs_path),
+            "feature_path": str(feature_path),
+            "matches_path": str(matches_path),
+            "camera_mode": str(spec.get("camera_mode", "AUTO")),
+            "skip_geometric_verification": bool(spec.get("skip_geometric_verification", False)),
+            "verbose": bool(spec.get("verbose", False)),
+        }
+        for key in ("image_list", "image_options", "mapper_options", "min_match_score"):
+            if spec.get(key) is not None:
+                runner_inputs[key] = spec[key]
+        if spec.get("timeout_seconds") is not None:
+            runner_inputs["timeout_seconds"] = spec["timeout_seconds"]
+        run = self._run_runner_action("hloc.reconstruct", runner_inputs, workspace=job_dir)
+        result = run.get("result") or {}
+        model_path = Path(str(result.get("sfm_dir") or sfm_dir))
+        summaries: list[dict[str, Any]] = [
+            {
+                "idx": 0,
+                "model_path": str(model_path),
+                "summary": result.get("summary"),
+                "engine": "hloc reconstruction",
+            }
+        ]
+        return summaries, []
+
+    def list_backend_config_schemas(self, *, include_schemas: bool = True) -> list[dict[str, Any]]:
+        """Backend option schemas for hloc's portable stages.
+
+        Describes the ``backend_options`` keys hloc accepts for the
+        portable feature, pair-retrieval, and matcher stages. Degrades to
+        an empty list when the hloc checkout is missing.
+        """
+        if self._find_root() is None:
+            return []
+        descriptors = [
+            self._config_descriptor(
+                config_id="hloc.features",
+                stage="features",
+                capability="features.extract.superpoint",
+                option_schema={
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "type": {
+                            "type": "string",
+                            "enum": sorted(FEATURE_CAPABILITY_CONFIGS),
+                            "description": "Portable feature type mapped to an hloc config.",
+                        },
+                        "feature_conf": {
+                            "type": "string",
+                            "enum": list(FEATURE_CONFIGS),
+                            "description": "Explicit hloc feature config override.",
+                        },
+                        "feature_path": {"type": "string"},
+                        "as_half": {"type": "boolean", "default": True},
+                        "overwrite": {"type": "boolean", "default": False},
+                        "conf_override": {"type": "object"},
+                        "timeout_seconds": {"type": "number"},
+                    },
+                },
+                description="hloc feature-extraction options for features.extract.*.",
+                include_schema=include_schemas,
+            ),
+            self._config_descriptor(
+                config_id="hloc.pairs.retrieval",
+                stage="pairs",
+                capability="pairs.retrieval",
+                option_schema={
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "descriptors_path": {"type": "string"},
+                        "retrieval_path": {"type": "string"},
+                        "pairs_path": {"type": "string"},
+                        "num_matched": {"type": "integer", "minimum": 1, "default": 20},
+                        "timeout_seconds": {"type": "number"},
+                    },
+                },
+                description="hloc global-retrieval pair-selection options.",
+                include_schema=include_schemas,
+            ),
+            self._config_descriptor(
+                config_id="hloc.matcher",
+                stage="matcher",
+                capability="matchers.superglue",
+                option_schema={
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "matcher": {
+                            "type": "string",
+                            "enum": sorted(
+                                {
+                                    *SPARSE_MATCHER_CAPABILITY_CONFIGS,
+                                    *DENSE_MATCHER_CAPABILITY_CONFIGS,
+                                }
+                            ),
+                            "description": "Portable matcher mapped to an hloc config.",
+                        },
+                        "feature_path": {"type": "string"},
+                        "pairs_path": {"type": "string"},
+                        "descriptors_path": {"type": "string"},
+                        "matches_path": {"type": "string"},
+                        "image_root": {"type": "string"},
+                        "num_matched": {"type": "integer", "minimum": 1, "default": 20},
+                        "overwrite": {"type": "boolean", "default": False},
+                        "conf_override": {"type": "object"},
+                        "timeout_seconds": {"type": "number"},
+                    },
+                },
+                description="hloc sparse/dense matcher options for matchers.*.",
+                include_schema=include_schemas,
+            ),
+        ]
+        return descriptors
+
+    def list_backend_artifact_contracts(self) -> list[dict[str, Any]]:
+        """Artifact I/O contracts for hloc's portable stages.
+
+        hloc emits portable ``sfmapi.*`` artifacts: HDF5 feature files,
+        pairs text, and HDF5 match files. Degrades to an empty list when
+        the hloc checkout is missing.
+        """
+        if self._find_root() is None:
+            return []
+        return [
+            {
+                "contract_id": "hloc.features",
+                "stage": "features",
+                "capability": "features.extract.superpoint",
+                "provider": "hloc",
+                "display_name": "hloc HDF5 feature outputs",
+                "description": "hloc writes local features to an HDF5 feature file.",
+                "accepts": [],
+                "emits": ["features.local.v1"],
+                "preferred": "features.local.v1",
+                "metadata": {"family": "hloc", "format": "hdf5"},
+            },
+            {
+                "contract_id": "hloc.pairs",
+                "stage": "pairs",
+                "capability": "pairs.retrieval",
+                "provider": "hloc",
+                "display_name": "hloc retrieval pair outputs",
+                "description": "hloc writes image pairs from retrieval to a pairs text file.",
+                "accepts": ["features.global.v1"],
+                "emits": ["pairs.image_names.v1"],
+                "preferred": "pairs.image_names.v1",
+                "metadata": {"family": "hloc", "format": "text"},
+            },
+            {
+                "contract_id": "hloc.matches",
+                "stage": "matcher",
+                "capability": "matchers.superglue",
+                "provider": "hloc",
+                "display_name": "hloc HDF5 match outputs",
+                "description": "hloc writes sparse and dense matches to an HDF5 match file.",
+                "accepts": ["features.local.v1", "pairs.image_names.v1"],
+                "emits": ["matches.indexed.v1"],
+                "preferred": "matches.indexed.v1",
+                "metadata": {"family": "hloc", "format": "hdf5"},
+            },
+        ]
+
+    def _config_descriptor(
+        self,
+        *,
+        config_id: str,
+        stage: str,
+        capability: str,
+        option_schema: dict[str, Any],
+        description: str,
+        include_schema: bool,
+    ) -> dict[str, Any]:
+        return {
+            "config_id": config_id,
+            "backend": self.name,
+            "stage": stage,
+            "capability": capability,
+            "provider": self.name,
+            "display_name": f"hloc {stage} options",
+            "description": description,
+            "option_schema": option_schema if include_schema else None,
+            "defaults": {},
+            "metadata": {"family": "hloc"},
+        }
 
     def runtime_versions(self) -> dict[str, str]:
         root = self._find_root()

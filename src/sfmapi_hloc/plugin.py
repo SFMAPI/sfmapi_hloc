@@ -68,17 +68,17 @@ class PluginManifest(TypedDict):
     trust_tier: str
 
 
-CAPABILITIES = [
-    "features.extract.superpoint",
-    "features.extract.disk",
-    "features.extract.aliked",
-    "pairs.retrieval",
-    "matchers.superglue",
-    "matchers.lightglue",
-    "matchers.loftr",
-    "matches.verify",
-    "localize.from_memory",
-]
+# Must stay identical to ``HlocBackend.capabilities()`` — every entry is
+# a portable sfmapi capability backed by a real runner.py wrapper.
+# ``matches.verify`` is intentionally omitted: hloc has no standalone
+# geometric-verification stage (see ``HlocBackend.verify_matches``).
+CAPABILITIES = list(HlocBackend.PORTABLE_CAPABILITIES)
+
+# Must stay identical to the ids emitted by
+# ``HlocBackend.list_backend_config_schemas`` and
+# ``HlocBackend.list_backend_artifact_contracts``.
+CONFIG_SCHEMAS = ["hloc.features", "hloc.matcher", "hloc.pairs.retrieval"]
+ARTIFACT_CONTRACTS = ["hloc.features", "hloc.matches", "hloc.pairs"]
 
 MANIFEST: PluginManifest = {
     "plugin_id": "hloc",
@@ -107,8 +107,8 @@ MANIFEST: PluginManifest = {
     },
     "capabilities": CAPABILITIES,
     "backend_actions": ["hloc.*"],
-    "config_schemas": ["hloc.*"],
-    "artifact_contracts": ["sfmapi.features", "sfmapi.matches", "sfmapi.pairs"],
+    "config_schemas": CONFIG_SCHEMAS,
+    "artifact_contracts": ARTIFACT_CONTRACTS,
     "licenses": [{"name": "AGPL-3.0-or-later"}],
     "upstream_projects": [
         {
@@ -140,8 +140,13 @@ class SfmapiHlocPlugin:
     def get_plugin_manifest(self) -> PluginManifest:
         return self.manifest
 
-    def register(self, register_backend: Callable[[str, Callable[[], HlocBackend]], None]) -> None:
-        register_backend(self.backend_name, self.backend_factory)
+    def register(self, register_backend: Callable[..., None]) -> None:
+        provider_ids = [str(provider["provider_id"]) for provider in self.manifest["providers"]]
+        try:
+            register_backend(self.backend_name, self.backend_factory, providers=provider_ids)
+        except TypeError:
+            # Older sfmapi without ``providers=`` kwarg on the registrar.
+            register_backend(self.backend_name, self.backend_factory)
 
 
 plugin = SfmapiHlocPlugin()
@@ -151,11 +156,14 @@ def get_plugin_manifest() -> PluginManifest:
     return MANIFEST
 
 
-def register(register_backend: Callable[[str, Callable[[], HlocBackend]], None]) -> None:
+def register(register_backend: Callable[..., None]) -> None:
     plugin.register(register_backend)
 
 
 __all__ = [
+    "ARTIFACT_CONTRACTS",
+    "CAPABILITIES",
+    "CONFIG_SCHEMAS",
     "MANIFEST",
     "PluginManifest",
     "SfmapiHlocPlugin",

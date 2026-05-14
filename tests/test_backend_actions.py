@@ -44,7 +44,26 @@ def test_action_catalog_exposes_hloc_actions(tmp_path: Path) -> None:
         len([action for action in action_ids if action.startswith("hloc.")])
         == len(HLOC_ACTIONS) + 2
     )
-    assert backend.capabilities() == set()
+    # The backend now implements a real portable surface alongside its
+    # action catalog; capabilities() reports exactly the wrapped stages.
+    assert backend.capabilities() == {
+        "features.extract.superpoint",
+        "features.extract.disk",
+        "features.extract.aliked",
+        "features.extract.r2d2",
+        "features.extract.d2net",
+        "features.extract.sift",
+        "features.extract.sosnet",
+        "pairs.retrieval",
+        "pairs.from_poses",
+        "matchers.superglue",
+        "matchers.lightglue",
+        "matchers.loftr",
+        "triangulate.retri",
+        "map.incremental",
+        "localize.from_memory",
+        "localize.batch",
+    }
     extract = next(action for action in actions if action["action_id"] == "hloc.extractFeatures")
     assert extract["input_schema"]["properties"]["feature_conf"]["enum"]
 
@@ -99,10 +118,30 @@ def test_cli_module_allowlist_matches_checked_out_hloc_scripts() -> None:
 
 def test_backend_contract_passes(tmp_path: Path) -> None:
     pytest.importorskip("sfmapi.backends")
-    from sfmapi.backends import Backend, SfmBackend, assert_backend_contract
+    from sfmapi.backends import (
+        Backend,
+        BatchLocalizationBackend,
+        FeatureBackend,
+        LocalizationBackend,
+        MappingBackend,
+        RefinementBackend,
+        SfmBackend,
+        assert_backend_contract,
+    )
 
     backend = HlocBackend(_fake_hloc(tmp_path / "Hierarchical-Localization"))
     assert isinstance(backend, Backend)
+    # hloc now implements the portable feature/match/verify,
+    # single-image + batch localization, and incremental-mapping
+    # protocol layers as thin runner wrappers.
+    assert isinstance(backend, FeatureBackend)
+    assert isinstance(backend, LocalizationBackend)
+    assert isinstance(backend, BatchLocalizationBackend)
+    assert isinstance(backend, MappingBackend)
+    # RefinementBackend wants bundle_adjustment / relocalize / pgo too,
+    # so the structural check fails even though triangulate() is wired.
+    assert not isinstance(backend, RefinementBackend)
+    # ... and not the full SfM protocol (no observation / export / etc.).
     assert not isinstance(backend, SfmBackend)
     assert_backend_contract(backend)
 

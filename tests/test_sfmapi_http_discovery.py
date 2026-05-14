@@ -41,12 +41,23 @@ def test_sfmapi_http_discovery_surfaces_hloc_actions(
         capabilities = client.get("/v1/capabilities").json()
         assert capabilities["backend"]["name"] == "hloc"
         assert capabilities["features"]["backend.actions"] is True
-        assert capabilities["features"]["backend.config_schemas"] is False
+        # hloc now also publishes portable stage capabilities plus the
+        # backing config-schema and artifact-contract discovery surfaces.
+        assert capabilities["features"]["features.extract.superpoint"] is True
+        assert capabilities["features"]["features.extract.sift"] is True
+        assert capabilities["features"]["matchers.superglue"] is True
+        assert capabilities["features"]["pairs.from_poses"] is True
+        assert capabilities["features"]["map.incremental"] is True
+        assert capabilities["features"]["triangulate.retri"] is True
+        assert capabilities["features"]["localize.batch"] is True
+        assert capabilities["features"]["matches.verify"] is False
+        assert capabilities["features"]["backend.config_schemas"] is True
+        assert capabilities["features"]["backend.artifact_contracts"] is True
 
         backend = client.get("/v1/backend").json()
         assert backend["name"] == "hloc"
         assert backend["action_count"] > 0
-        assert backend["config_schema_count"] == 0
+        assert backend["config_schema_count"] == 3
 
         actions = client.get("/v1/backend/actions?include_schemas=true&page_size=50").json()[
             "items"
@@ -57,4 +68,15 @@ def test_sfmapi_http_discovery_surfaces_hloc_actions(
         pipeline = next(action for action in actions if action["action_id"] == "hloc.runPipeline")
         assert "pairing_mode" in pipeline["input_schema"]["properties"]
 
-        assert client.get("/v1/backend/config-schemas").json()["items"] == []
+        config_schemas = client.get("/v1/backend/config-schemas").json()["items"]
+        assert {row["config_id"] for row in config_schemas} == {
+            "hloc.features",
+            "hloc.matcher",
+            "hloc.pairs.retrieval",
+        }
+        artifact_contracts = client.get("/v1/backend/artifact-contracts").json()["items"]
+        assert {row["contract_id"] for row in artifact_contracts} == {
+            "hloc.features",
+            "hloc.matches",
+            "hloc.pairs",
+        }
