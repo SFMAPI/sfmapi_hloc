@@ -539,13 +539,44 @@ class HlocBackend:
         if pairs_path is None:
             descriptors_path = options.get("descriptors_path") or options.get("retrieval_path")
             if descriptors_path is None:
-                raise CapabilityUnavailableError(
-                    capability="pairs.retrieval",
-                    reason=(
-                        "hloc retrieval matching needs options['pairs_path'] or "
-                        "options['descriptors_path'] (global retrieval features)"
-                    ),
+                # No precomputed global descriptors — extract them with the
+                # caller-selected retrieval model (NetVLAD / DIR / OpenIBL /
+                # MegaLoc). Needs an image root to extract from.
+                retrieval_conf = str(options.get("retrieval_conf") or "netvlad")
+                if retrieval_conf not in RETRIEVAL_CONFIGS:
+                    raise CapabilityUnavailableError(
+                        capability="pairs.retrieval",
+                        reason=(
+                            f"unknown retrieval_conf {retrieval_conf!r}; "
+                            f"expected one of {sorted(RETRIEVAL_CONFIGS)}"
+                        ),
+                    )
+                image_root = options.get("image_root")
+                if image_root is None:
+                    raise CapabilityUnavailableError(
+                        capability="pairs.retrieval",
+                        reason=(
+                            "hloc retrieval matching needs options['pairs_path'], "
+                            "options['descriptors_path'] (global retrieval features), "
+                            "or options['image_root'] (+ optional retrieval_conf) to "
+                            "extract global descriptors"
+                        ),
+                    )
+                extract_run = self._run_runner_action(
+                    "hloc.extractFeatures",
+                    {
+                        "image_dir": str(image_root),
+                        "feature_conf": retrieval_conf,
+                        "outputs_dir": str(outputs_dir),
+                    },
+                    workspace=outputs_dir,
                 )
+                descriptors_path = (extract_run.get("result") or {}).get("feature_path")
+                if not descriptors_path:
+                    raise CapabilityUnavailableError(
+                        capability="pairs.retrieval",
+                        reason=f"hloc {retrieval_conf} descriptor extraction produced no output",
+                    )
             pairs_path = outputs_dir / "pairs-retrieval.txt"
             pairs_inputs: dict[str, Any] = {
                 "descriptors_path": str(descriptors_path),
@@ -989,6 +1020,16 @@ class HlocBackend:
                         "retrieval_path": {"type": "string"},
                         "pairs_path": {"type": "string"},
                         "num_matched": {"type": "integer", "minimum": 1, "default": 20},
+                        "retrieval_conf": {
+                            "type": "string",
+                            "enum": list(RETRIEVAL_CONFIGS),
+                            "default": "netvlad",
+                            "description": (
+                                "Global-retrieval model used to extract image "
+                                "descriptors when descriptors_path is not "
+                                "supplied. Ignored when descriptors_path is given."
+                            ),
+                        },
                         "timeout_seconds": {"type": "number"},
                     },
                 },
